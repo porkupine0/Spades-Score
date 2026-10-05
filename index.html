@@ -139,6 +139,19 @@ details.rules{background:var(--surface);border:1px solid var(--line);border-radi
 details.rules summary{cursor:pointer;font-weight:700}
 .rulelist{font-size:14px;margin:10px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
 
+/* how to play */
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.tab{padding:9px 6px;border-radius:10px;font-size:15px}
+.tab[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.guide h3{font-size:16px;font-weight:800;color:var(--accent)}
+.guide section{display:flex;flex-direction:column;gap:6px}
+.guide p,.guide li{font-size:15px;line-height:1.55;max-width:65ch}
+.guide p{margin:0}
+.guide ul,.guide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px}
+.rtable{display:grid;grid-template-columns:1fr auto;gap:5px 14px;font-size:15px;margin:0}
+.rtable dt{color:var(--ink)} .rtable dd{margin:0;font-weight:800;color:var(--accent);text-align:right}
+.example{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:14px;display:flex;flex-direction:column;gap:4px}
+
 /* stats */
 .hl{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .aw{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--bg);display:flex;flex-direction:column;gap:2px}
@@ -204,7 +217,8 @@ const SPADE = `<svg viewBox="0 0 100 100" aria-hidden="true"><rect width="100" h
 const DEFAULT_RULES = { target:500, mercy:false, nil:true, blind:false, bags:true };
 
 const blankSetup = () => ({ teams:[{name:"",p:["",""]},{name:"",p:["",""]}], firstDealer:0, rules:{...DEFAULT_RULES} });
-let state = load() || { phase:"setup", setup:blankSetup(), teams:[], rules:{...DEFAULT_RULES}, dealer0:0, hands:[], pending:null };
+let state = load() || { phase:"setup", setup:blankSetup(), teams:[], rules:{...DEFAULT_RULES}, dealer0:0, hands:[], pending:null, tab:"game" };
+if (!state.tab) state.tab = "game";
 let entry = null;
 let confirmKey = null, confirmTimer = null;
 
@@ -294,10 +308,60 @@ document.addEventListener("visibilitychange", keepAwake);
 function render(){
   const app = document.getElementById("app");
   const focusId = document.activeElement && document.activeElement.id;
-  app.innerHTML = state.phase === "setup" ? setupView() : playView();
+  app.innerHTML = state.tab === "guide" ? header() + guideView() : state.phase === "setup" ? setupView() : playView();
   if (focusId){ const el = document.getElementById(focusId); if (el) el.focus({preventScroll:true}); }
 }
-function header(extra=""){ return `<div class="brand"><div class="logo">${SPADE}<h1>Spades</h1></div><div class="hx-hbtns">${hx.button()}${extra}</div></div>`; }
+function header(extra=""){ return `<div class="brand"><div class="logo">${SPADE}<h1>Spades</h1></div><div class="hx-hbtns">${hx.button()}${extra}</div></div>
+  <div class="tabs" role="tablist"><button class="tab" role="tab" id="tab-game" data-act="tab" data-v="game" aria-selected="${state.tab==="game"}">Game</button><button class="tab" role="tab" id="tab-guide" data-act="tab" data-v="guide" aria-selected="${state.tab==="guide"}">How to play</button></div>`; }
+
+// The rules as this game plays them: the house rules picked at setup, or the ones the current game uses
+function guideView(){
+  const R = state.phase === "play" ? state.rules : state.setup.rules;
+  return `<div class="panel guide">
+    <section><h2>The idea</h2><p>Spades is a partnership trick-taking game. Before each hand, every player bids how many tricks they'll take, and spades are always trump. Make your team's bid and you score. Fall short and you lose points.</p></section>
+    <section><h3>What you need</h3><ul><li>4 players in two teams of 2. Partners sit across from each other.</li><li>One standard 52-card deck. Aces are high and 2s are low.</li></ul></section>
+    <section><h3>1. The deal</h3><p>Deal out the whole deck, 13 cards each. The deal passes to the left after every hand.</p></section>
+    <section><h3>2. Bidding</h3>
+      <ul><li>Starting left of the dealer, each player bids how many tricks they expect to take, from 1 to 13. The dealer bids last.</li>
+      ${R.nil?`<li>Or bid <b>nil</b>: you promise to take no tricks at all.${R.blind?` A <b>blind nil</b> is a nil bid made before you look at your cards.`:""}</li>`:""}
+      <li>Your team's bid is both partners' bids added together. The four bids don't have to add up to 13.</li></ul></section>
+    <section><h3>3. Playing tricks</h3>
+      <ul><li>The player left of the dealer leads the first trick.</li>
+      <li>Going left, everyone plays one card. You must follow the suit that was led if you can. If you can't, play anything, including a spade.</li>
+      <li>The highest spade wins the trick. If no spade was played, the highest card of the suit led wins. The winner leads the next trick.</li>
+      <li>You can't lead a spade until spades are <b>broken</b>: someone has played a spade because they couldn't follow suit. If you have only spades left, you can lead one anyway.</li></ul></section>
+    <section><h3>4. Scoring</h3>
+      <dl class="rtable">
+        <dt>Your team takes at least its bid: per trick bid</dt><dd>10</dd>
+        <dt>Each extra trick (a <b>bag</b>)</dt><dd>0</dd>
+        <dt>Your team takes fewer than its bid (<b>set</b>): per trick bid</dt><dd>−10</dd>
+        ${R.nil?`<dt>Nil, taking no tricks</dt><dd>+100</dd><dt>Nil, taking any trick</dt><dd>−100</dd>`:""}
+        ${R.nil && R.blind?`<dt>Blind nil, taking no tricks</dt><dd>+200</dd><dt>Blind nil, taking any trick</dt><dd>−200</dd>`:""}
+        ${R.bags?`<dt>Every 10 bags, then the count starts over</dt><dd>−100</dd>`:""}
+      </dl>
+      ${R.nil?`<p>Nil is scored for that player alone. Their partner still has to make their own bid, and any tricks the nil bidder takes don't help with it. Those tricks count as bags.</p>`:""}
+      <div class="example"><span><b>Example:</b> Us bid 4 + 3 = 7 and take 9 tricks: +70, plus 2 bags.</span><span>Them bid 5 + 1 = 6 but take only 4: −60.</span></div></section>
+    <section><h3>5. Winning</h3><p>The first team to ${R.target} wins. If both teams pass it on the same hand, the higher score wins. A tie keeps going.${R.mercy?` A team that falls to −200 loses right away.`:""}</p></section>
+    <section><h3>Strategy tips</h3>
+      <ul><li>Count sure tricks when you bid: Aces, guarded Kings, and high spades. Each spade beyond your third or fourth is likely a winner too.</li>
+      ${R.bags?`<li>Bags add up. Don't bid low just to be safe, or 10 of them will cost you 100.</li><li>When the other team has a lot of bags, give them tricks they didn't bid.</li>`:`<li>With no bag penalty, extra tricks are free. When unsure, bid low.</li>`}
+      ${R.nil?`<li>Nil works best with low cards in every suit and few spades. If your partner bids nil, play your high cards to win tricks they might be stuck with.</li>`:""}
+      <li>Keep track of how many spades have been played. There are 13.</li></ul></section>
+    <section><h3>Using this app</h3>
+      <ol><li>Enter both teams and pick who deals first. Partners sit across, so seats go around the table in the order shown.</li>
+      <li>After the deal, tap Enter bids and tap each player's bid in bidding order. Then Lock in bids.</li>
+      <li>After the hand, tap Enter tricks taken. After three players, the app fills in the last so the tricks add up to 13.</li>
+      <li>The app scores every bid${R.nil?", nil":""}${R.bags?" and bag":""}, and shows how close each team is to ${R.target}.</li>
+      <li>Tap a hand to fix its bids or tricks.</li></ol></section>
+    <section><h3>Glossary</h3>
+      <ul><li><b>Trick:</b> one card from each player. The highest spade, or the highest card of the suit led, takes all four.</li>
+      <li><b>Trump:</b> a suit that beats all the others. In Spades it's always spades.</li>
+      <li><b>Set:</b> taking fewer tricks than your team bid.</li>
+      <li><b>Bag:</b> a trick taken beyond your bid. Also called an overtrick.</li>
+      ${R.nil?`<li><b>Nil:</b> a bid to take no tricks at all.</li>`:""}
+      <li><b>Breaking spades:</b> the first spade played on another suit. After that, spades can be led.</li></ul></section>
+  </div>`;
+}
 
 function rulesText(R){
   return `<ul class="rulelist">
@@ -547,6 +611,7 @@ document.addEventListener("click", e => {
   switch(act){
     case "rule": { const k = b.dataset.k; state.setup.rules[k] = !state.setup.rules[k]; if (k==="nil" && !state.setup.rules.nil) state.setup.rules.blind = false; if (k==="blind" && state.setup.rules.blind) state.setup.rules.nil = true; save(); render(); break; }
     case "target": state.setup.rules.target = +b.dataset.v; save(); render(); break;
+    case "tab": state.tab = b.dataset.v; save(); render(); window.scrollTo(0,0); break;
     case "start": {
       const su = state.setup;
       state.teams = su.teams.map((t,i)=>({ name: t.name.trim() || (i===0?"Us":"Them"), p: t.p.map(x=>x.trim()) }));
