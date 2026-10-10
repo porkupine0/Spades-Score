@@ -393,7 +393,7 @@ function guideView(){
     <section><h3>Using this app</h3>
       <ol><li>Enter both teams and pick who deals first. Partners sit across, so seats go around the table in the order shown.</li>
       <li>After the deal, tap Enter bids and tap each player's bid in bidding order. Then Lock in bids.</li>
-      <li>After the hand, tap Enter tricks taken. After three players, the app fills in the last so the tricks add up to 13.</li>
+      <li>After the hand, tap Enter tricks taken. Each team's tricks are entered together, unless someone on it bid nil; then that team is entered player by player. The app fills in the last count so the tricks add up to 13.</li>
       <li>The app scores every bid${R.nil?", nil":""}${R.bags?" and bag":""}, and shows how close each team is to ${R.target}.</li>
       <li>Tap a hand to fix its bids or tricks.</li></ol></section>
     <section><h3>Glossary</h3>
@@ -563,7 +563,7 @@ function pendingView(){
   </div>`;
 }
 
-function gridFor(kind, p, val, isAuto){
+function gridFor(kind, p, val, isAuto, label){
   let html = "";
   if (kind === "bid" && state.rules.nil){
     html += `<button class="nil" id="bid-${p}-nil" data-act="bid" data-p="${p}" data-v="0" aria-pressed="${val===0 && !entry.blind[p]}">Nil</button>`;
@@ -573,7 +573,7 @@ function gridFor(kind, p, val, isAuto){
   for (let v = start; v <= 13; v++){
     html += `<button id="${kind}-${p}-${v}" data-act="${kind}" data-p="${p}" data-v="${v}" class="${kind==="trick"&&isAuto?"auto":""}" aria-pressed="${val===v}" aria-label="${kind==="bid"?"Bid":"Took"} ${v}">${v}</button>`;
   }
-  return `<div class="grid13" role="group" aria-label="${kind==="bid"?"Bid":"Tricks"} for ${P(p)}">${html}</div>`;
+  return `<div class="grid13" role="group" aria-label="${kind==="bid"?"Bid":"Tricks"} for ${label || P(p)}">${html}</div>`;
 }
 
 function entryView(hIdx){
@@ -581,18 +581,30 @@ function entryView(hIdx){
   const orderP = [1,2,3,4].map(k => (d + k) % 4); // bidding order, dealer last
   const showBids = mode === "bids" || mode === "edit";
   const showTricks = mode === "tricks" || mode === "edit";
-  const rows = orderP.map(p => {
+  let rows = showBids ? orderP.map(p => {
     const t = teamOf(p);
-    const pick = [];
-    if (showBids && entry.bids[p] != null) pick.push(`bid ${bidLabel(entry.bids[p], entry.blind[p])}`);
-    if (mode === "tricks") pick.push(`bid ${bidLabel(entry.bids[p], entry.blind[p])}`);
-    if (showTricks && entry.tricks[p] != null) pick.push(`took ${entry.tricks[p]}${entry.auto===p?`<span class="auto">auto</span>`:""}`);
+    const pick = entry.bids[p] != null ? `bid ${bidLabel(entry.bids[p], entry.blind[p])}` : "";
     return `<div class="prow">
-      <div class="phead"><span class="pn"><span class="dot ${tcls(t)}"></span>${P(p)}</span><span class="hint">${T(t)}</span><span class="pick num">${pick.join(" · ")}</span></div>
-      ${showBids?`${mode==="edit"?`<span class="sublbl">Bid</span>`:""}${gridFor("bid", p, entry.bids[p])}`:""}
-      ${showTricks?`${mode==="edit"?`<span class="sublbl">Tricks taken</span>`:""}${gridFor("trick", p, entry.tricks[p], entry.auto===p)}`:""}
+      <div class="phead"><span class="pn"><span class="dot ${tcls(t)}"></span>${P(p)}</span><span class="hint">${T(t)}</span><span class="pick num">${pick}</span></div>
+      ${mode==="edit"?`<span class="sublbl">Bid</span>`:""}${gridFor("bid", p, entry.bids[p])}
     </div>`;
-  }).join("");
+  }).join("") : "";
+  if (showTricks){
+    // Tricks are counted per team, except a team with a nil bidder counts each partner on their own.
+    const units = trickUnits(entry.bids);
+    const ordered = [...new Set(orderP.map(p => units.find(u => u.ps.includes(p))))];
+    if (mode === "edit") rows += `<div class="prow"><span class="sublbl">Tricks taken</span></div>`;
+    rows += ordered.map(u => {
+      const t = teamOf(u.a), val = unitVal(u), pick = [];
+      if (mode === "tricks") pick.push(u.team ? `bid ${u.ps.reduce((s,p)=>s+entry.bids[p],0)}` : `bid ${bidLabel(entry.bids[u.a], entry.blind[u.a])}`);
+      if (val != null) pick.push(`took ${val}${entry.auto===u.a?`<span class="auto">auto</span>`:""}`);
+      const name = u.team ? T(t) : P(u.a), sub = u.team ? `${P(t)} &amp; ${P(t+2)}` : T(t);
+      return `<div class="prow">
+      <div class="phead"><span class="pn"><span class="dot ${tcls(t)}"></span>${name}</span><span class="hint">${sub}</span><span class="pick num">${pick.join(" · ")}</span></div>
+      ${gridFor("trick", u.a, val, entry.auto===u.a, name)}
+    </div>`;
+    }).join("");
+  }
 
   let sum = "";
   if (showBids){
@@ -601,15 +613,15 @@ function entryView(hIdx){
     sum += `<div class="sumline num"><span class="ta">${T(0)} bid ${tb[0]}</span><span class="tb">${T(1)} bid ${tb[1]}</span><span>${all} of 13 bid</span></div>`;
   }
   if (showTricks){
-    const got = entry.tricks.filter(v=>v!=null).length;
+    const units = trickUnits(entry.bids), done = units.every(u => unitVal(u) != null);
     const s = entry.tricks.reduce((a,v)=>a+(v||0),0);
-    const cls = got === 4 ? (s === 13 ? "ok" : "bad") : "";
-    const msg = got === 4 ? (s === 13 ? "13 of 13 tricks. Ready to post." : `${s} of 13 tricks. Tricks need to add up to 13.`) : `${s} of 13 tricks so far`;
+    const cls = done ? (s === 13 ? "ok" : "bad") : "";
+    const msg = done ? (s === 13 ? "13 of 13 tricks. Ready to post." : `${s} of 13 tricks. Tricks need to add up to 13.`) : `${s} of 13 tricks so far`;
     sum += `<div class="sumline ${cls} num">${msg}</div>`;
   }
 
   const title = mode === "bids" ? `Bids for hand ${hIdx+1}` : mode === "tricks" ? `Tricks for hand ${hIdx+1}` : `Edit hand ${hIdx+1}`;
-  const help = mode === "bids" ? "Tap each player's bid, in bidding order." : mode === "tricks" ? "Tap tricks taken. After three players, the last one fills in so the hand adds to 13." : "Fix any bid or trick count, then save.";
+  const help = mode === "bids" ? "Tap each player's bid, in bidding order." : mode === "tricks" ? "Tap tricks taken by each team. If someone bid nil, their team is counted player by player. The last count fills in so the hand adds to 13." : "Fix any bid or trick count, then save.";
   const btn = mode === "bids" ? "Lock in bids" : mode === "tricks" ? `Post hand ${hIdx+1}` : "Save changes";
   return `<div class="panel">
     <div class="row"><h2 class="grow">${title}</h2><button class="small ghost" data-act="cancel" id="cancel">Cancel</button></div>
@@ -622,16 +634,26 @@ function entryView(hIdx){
   </div>`;
 }
 
+// A trick-counting unit is a whole team (tricks stored on its first player, 0 on the partner),
+// or a single player when someone on that team bid nil. u.a is the player the unit's buttons point at.
+function trickUnits(bids){
+  return [0,1].flatMap(t => [t,t+2].some(p => bids[p] === 0)
+    ? [{ a:t, ps:[t] }, { a:t+2, ps:[t+2] }]
+    : [{ a:t, ps:[t,t+2], team:true }]);
+}
+const unitVal = u => u.ps.every(p => entry.tricks[p] == null) ? null : u.ps.reduce((s,p)=>s+(entry.tricks[p]||0),0);
+function setUnit(u, v){ u.ps.forEach((p,i) => entry.tricks[p] = v == null ? null : (i === 0 ? v : 0)); }
+
 function autofill(){
-  const set = entry.tricksSet;
-  const unset = [0,1,2,3].filter(p => !set[p]);
+  const units = trickUnits(entry.bids), set = entry.tricksSet;
   if (entry.auto != null && set[entry.auto]) entry.auto = null;
+  const unset = units.filter(u => !set[u.a]);
   if (unset.length === 1){
-    const p = unset[0];
-    const s = [0,1,2,3].filter(q=>q!==p).reduce((a,q)=>a+entry.tricks[q],0);
-    if (s <= 13){ entry.tricks[p] = 13 - s; entry.auto = p; }
-    else { entry.tricks[p] = null; entry.auto = null; }
-  } else if (entry.auto != null){ entry.tricks[entry.auto] = null; entry.auto = null; }
+    const u = unset[0];
+    const s = units.filter(x => x !== u).reduce((a,x)=>a+unitVal(x),0);
+    if (s <= 13){ setUnit(u, 13 - s); entry.auto = u.a; }
+    else { setUnit(u, null); entry.auto = null; }
+  } else if (entry.auto != null){ setUnit(units.find(u => u.a === entry.auto), null); entry.auto = null; }
 }
 
 function openEntry(mode, editIdx){
@@ -668,14 +690,16 @@ document.addEventListener("click", e => {
     case "cancel": entry = null; render(); break;
     case "cancelHand": confirmThen("cancelHand", ()=>{ state.pending = null; save(); render(); }); break;
     case "bid": {
-      const p = +b.dataset.p, v = b.dataset.v;
+      const p = +b.dataset.p, v = b.dataset.v, t = teamOf(p);
+      const wasTeam = trickUnits(entry.bids).some(u => u.team && u.a === t);
       if (v === "B"){ entry.bids[p] = 0; entry.blind[p] = true; }
       else { entry.bids[p] = +v; entry.blind[p] = false; }
+      if (entry.mode === "edit" && wasTeam !== trickUnits(entry.bids).some(u => u.team && u.a === t)){ entry.tricks[t] = entry.tricks[t+2] = null; }
       entry.error = ""; render(); break;
     }
     case "trick": {
       const p = +b.dataset.p, v = +b.dataset.v;
-      entry.tricks[p] = v; entry.tricksSet[p] = true; entry.error = "";
+      setUnit(trickUnits(entry.bids).find(u => u.a === p), v); entry.tricksSet[p] = true; entry.error = "";
       if (entry.mode === "tricks") autofill(); else entry.auto = null;
       render(); break;
     }
@@ -688,8 +712,8 @@ document.addEventListener("click", e => {
       if (m === "bids"){
         state.pending = { bids:[...entry.bids], blind:[...entry.blind] }; entry = null; save(); render(); window.scrollTo({top:0, behavior:"smooth"}); break;
       }
-      const missT = [0,1,2,3].find(p => entry.tricks[p] == null);
-      if (missT != null){ entry.error = `Pick tricks taken for ${pName(state.teams,missT)}.`; render(); break; }
+      const missT = trickUnits(entry.bids).find(u => unitVal(u) == null);
+      if (missT){ entry.error = `Pick tricks taken for ${missT.team ? tName(state.teams, missT.a) : pName(state.teams, missT.a)}.`; render(); break; }
       const s = entry.tricks.reduce((a,v)=>a+v,0);
       if (s !== 13){ entry.error = `Tricks add up to ${s}. They need to add up to 13.`; render(); break; }
       const hand = { bids:[...entry.bids], blind:[...entry.blind], tricks:[...entry.tricks] };
